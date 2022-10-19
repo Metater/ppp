@@ -1,11 +1,16 @@
 //#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")] // hide console window on Windows in release
 
+// copy escapi.dll to build folder
+
+mod webcam;
+mod utils;
+
 use std::{time::Instant, sync::mpsc::Receiver};
 
 use camera_capture::ImageIterator;
 use eframe::egui;
 use egui::{ImageData, ColorImage, Color32, Context};
-use image::{ImageBuffer, Rgb};
+use image::{ImageBuffer, Rgb, RgbImage};
 extern crate camera_capture;
 
 fn main() {
@@ -19,54 +24,17 @@ fn main() {
 }
 
 struct PPPApp {
-    name: String,
-    age: u32,
-    texture: Option<egui::TextureHandle>,
-    webcam: std::sync::mpsc::Receiver<ImageData>,
-    current_frame: Option<ImageData>,
+    webcam_texture: Option<egui::TextureHandle>,
+    webcam: Receiver<ImageBuffer<Rgb<u8>, Vec<u8>>>,
+    current_frame: Option<ImageBuffer<Rgb<u8>, Vec<u8>>>,
 }
 
 impl Default for PPPApp {
     fn default() -> Self {
-        let (sender, receiver) = std::sync::mpsc::channel();
-        let _ = std::thread::spawn(move || {
-            let res1 = camera_capture::create(0);
-            if let Err(e) = res1 {
-                eprintln!("could not open camera: {}", e);
-                std::process::exit(1);
-            }
-            let res2 = res1.unwrap().resolution(640, 480).unwrap().fps(30.0).unwrap().start();
-            if let Err(e) = res2 {
-                eprintln!("could retrieve data from camera: {}", e);
-                std::process::exit(2);
-            }
-            let cam = res2.unwrap();
-            for frame in cam {
-                let mut pixels = Vec::new();
-                for pixel in frame.pixels() {
-                    let mut avg = pixel[0] as i16 + pixel[1] as i16 + pixel[2] as i16;
-                    avg /= 3;
-                    pixels.push(Color32::from_rgb(avg as u8, avg as u8, avg as u8));
-                }
-                let dimensions = frame.dimensions();
-                let size = [dimensions.0 as usize, dimensions.1 as usize];
-
-                let image = ImageData::Color(ColorImage {
-                    size,
-                    pixels
-                });
-                if sender.send(image).is_err() {
-                    break;
-                }
-            }
-        });
-        
         Self {
-            name: "Arthur".to_owned(),
-            age: 42,
-            texture: None,
-            webcam: receiver,
-            current_frame: None,
+            webcam_texture: None,
+            webcam: webcam::start(),
+            current_frame: Some(ImageBuffer::new(640, 480)),
         }
     }
 }
@@ -75,9 +43,18 @@ impl eframe::App for PPPApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         egui::CentralPanel::default().show(ctx, |ui| {
             ctx.request_repaint();
-            let now = Instant::now();
+
+            // INIT
+            let webcam_texture = self.webcam_texture.get_or_insert_with(|| {
+                ui.ctx().load_texture(
+                    "webcam",
+                    //egui::ColorImage::example(),
+                    ImageData::Color(ColorImage::example()),
+                    egui::TextureFilter::Nearest
+                )
+            });
+
             ui.heading("Hello, World!");
-            println!("test??");
             /*
             ui.horizontal(|ui| {
                 ui.label("Your name: ");
@@ -89,28 +66,43 @@ impl eframe::App for PPPApp {
             }
             ui.label(format!("Hello '{}', age {}", self.name, self.age));
             */
-            let texture = self.texture.get_or_insert_with(|| {
-                ui.ctx().load_texture(
-                    "webcam",
-                    //egui::ColorImage::example(),
-                    ImageData::Color(ColorImage::example()),
-                    egui::TextureFilter::Nearest
-                )
-            });
 
-            //ui.heading(self.camera.is_stream_open().to_string());
-            //let frame = image::io::Reader::open("D:/Webcam/frame.png").unwrap().decode().unwrap();
+            let now = Instant::now();
+
             if let Ok(frame) = self.webcam.try_recv() {
-                self.current_frame = Some(frame.clone());
-                texture.set(frame, egui::TextureFilter::Nearest);
-                let size = texture.size_vec2();
-                ui.image(texture, size);
+                /*
+                let mut diff = RgbImage::new(640, 480);
+                if let Some(old_frame) = &self.current_frame {
+                    for y in 0..480 {
+                        for x in 0..640 {
+                            let new_pixel = frame.get_pixel(x, y);
+                            let old_pixel = old_frame.get_pixel(x, y);
+                            let pixel_diff = Rgb([
+                                (new_pixel[0] as i32 - old_pixel[0] as i32).abs() as u8,
+                                (new_pixel[1] as i32 - old_pixel[1] as i32).abs() as u8,
+                                (new_pixel[2] as i32 - old_pixel[2] as i32).abs() as u8,
+                            ]);
+                            diff.put_pixel(x, y, pixel_diff)
+                        }
+                    }
+                }
+                */
+
+                let image_data = utils::to_image_data(&frame, false);
+
+                webcam_texture.set(image_data, egui::TextureFilter::Nearest);
+                let size = webcam_texture.size_vec2();
+                ui.image(webcam_texture, size);
+
+                self.current_frame = Some(frame);
             }
             else {
-                if let Some(frame) = &self.current_frame {
-                    texture.set(frame.clone(), egui::TextureFilter::Nearest);
-                    let size = texture.size_vec2();
-                    ui.image(texture, size);
+                if let Some(old_frame) = &self.current_frame {
+                    let image_data = utils::to_image_data(&old_frame, false);
+
+                    webcam_texture.set(image_data, egui::TextureFilter::Nearest);
+                    let size = webcam_texture.size_vec2();
+                    ui.image(webcam_texture, size);
                 }
             }
 
