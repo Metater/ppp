@@ -2,15 +2,13 @@
 
 // copy escapi.dll to build folder
 
-mod webcam;
 mod utils;
+mod pipeline;
 
-use std::{time::Instant, sync::mpsc::Receiver};
-
-use camera_capture::ImageIterator;
 use eframe::egui;
-use egui::{ImageData, ColorImage, Color32, Context};
-use image::{ImageBuffer, Rgb, RgbImage};
+use egui::{ImageData, ColorImage};
+use pipeline::Pipeline;
+
 extern crate camera_capture;
 
 fn main() {
@@ -24,17 +22,19 @@ fn main() {
 }
 
 struct PPPApp {
-    webcam_texture: Option<egui::TextureHandle>,
-    webcam: Receiver<ImageBuffer<Rgb<u8>, Vec<u8>>>,
-    current_frame: Option<ImageBuffer<Rgb<u8>, Vec<u8>>>,
+    display_texture: Option<egui::TextureHandle>,
+    pipeline: Pipeline,
+    current_frame: Option<ImageData>,
+    current_fps: usize,
 }
 
 impl Default for PPPApp {
     fn default() -> Self {
         Self {
-            webcam_texture: None,
-            webcam: webcam::start(),
-            current_frame: Some(ImageBuffer::new(640, 480)),
+            display_texture: None,
+            pipeline: Pipeline::new(0, 1280, 720),
+            current_frame: Some(ImageData::Color(ColorImage::example())),
+            current_fps: 0,
         }
     }
 }
@@ -44,11 +44,9 @@ impl eframe::App for PPPApp {
         egui::CentralPanel::default().show(ctx, |ui| {
             ctx.request_repaint();
 
-            // INIT
-            let webcam_texture = self.webcam_texture.get_or_insert_with(|| {
+            let display_texture = self.display_texture.get_or_insert_with(|| {
                 ui.ctx().load_texture(
                     "webcam",
-                    //egui::ColorImage::example(),
                     ImageData::Color(ColorImage::example()),
                     egui::TextureFilter::Nearest
                 )
@@ -67,46 +65,18 @@ impl eframe::App for PPPApp {
             ui.label(format!("Hello '{}', age {}", self.name, self.age));
             */
 
-            let now = Instant::now();
-
-            if let Ok(frame) = self.webcam.try_recv() {
-                /*
-                let mut diff = RgbImage::new(640, 480);
-                if let Some(old_frame) = &self.current_frame {
-                    for y in 0..480 {
-                        for x in 0..640 {
-                            let new_pixel = frame.get_pixel(x, y);
-                            let old_pixel = old_frame.get_pixel(x, y);
-                            let pixel_diff = Rgb([
-                                (new_pixel[0] as i32 - old_pixel[0] as i32).abs() as u8,
-                                (new_pixel[1] as i32 - old_pixel[1] as i32).abs() as u8,
-                                (new_pixel[2] as i32 - old_pixel[2] as i32).abs() as u8,
-                            ]);
-                            diff.put_pixel(x, y, pixel_diff)
-                        }
-                    }
-                }
-                */
-
-                let image_data = utils::to_image_data(&frame, false);
-
-                webcam_texture.set(image_data, egui::TextureFilter::Nearest);
-                let size = webcam_texture.size_vec2();
-                ui.image(webcam_texture, size);
-
-                self.current_frame = Some(frame);
-            }
-            else {
-                if let Some(old_frame) = &self.current_frame {
-                    let image_data = utils::to_image_data(&old_frame, false);
-
-                    webcam_texture.set(image_data, egui::TextureFilter::Nearest);
-                    let size = webcam_texture.size_vec2();
-                    ui.image(webcam_texture, size);
-                }
+            if let Some(output) = self.pipeline.poll() {
+                self.current_frame = Some(output.frame);
+                self.current_fps = output.fps;
             }
 
-            println!("{}", now.elapsed().as_millis());
+            if let Some(frame) = &self.current_frame {
+                display_texture.set(frame.clone(), egui::TextureFilter::Nearest);
+                let size = display_texture.size_vec2();
+                ui.image(display_texture, size);
+
+                ui.label(format!("FPS: {}", self.current_fps));
+            }
         });
     }
 }
