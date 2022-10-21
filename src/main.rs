@@ -5,6 +5,8 @@
 mod utils;
 mod pipeline;
 
+use std::sync::{atomic::{AtomicU8, Ordering}, Arc};
+
 use eframe::egui;
 use egui::{ImageData, ColorImage};
 use pipeline::Pipeline;
@@ -26,15 +28,33 @@ struct PPPApp {
     pipeline: Pipeline,
     current_frame: Option<ImageData>,
     current_fps: usize,
+    current_processing_time: f64,
+
+    setting_threshold: Arc<AtomicU8>,
+    setting_mut_threshold: u8,
+
+    setting_block_size: Arc<AtomicU8>,
+    setting_mut_block_size: u8,
 }
 
 impl Default for PPPApp {
     fn default() -> Self {
+        let setting_threshold = Arc::new(AtomicU8::new(0));
+
+        let setting_block_size = Arc::new(AtomicU8::new(1));
+
         Self {
             display_texture: None,
-            pipeline: Pipeline::new(0, 1280, 720),
+            pipeline: Pipeline::new(0, 1280, 720, setting_threshold.clone(), setting_block_size.clone()),
             current_frame: Some(ImageData::Color(ColorImage::example())),
             current_fps: 0,
+            current_processing_time: 0.0,
+
+            setting_threshold,
+            setting_mut_threshold: 50,
+
+            setting_block_size,
+            setting_mut_block_size: 1,
         }
     }
 }
@@ -68,6 +88,7 @@ impl eframe::App for PPPApp {
             if let Some(output) = self.pipeline.poll() {
                 self.current_frame = Some(output.frame);
                 self.current_fps = output.fps;
+                self.current_processing_time = output.processing_time;
             }
 
             if let Some(frame) = &self.current_frame {
@@ -76,6 +97,13 @@ impl eframe::App for PPPApp {
                 ui.image(display_texture, size);
 
                 ui.label(format!("FPS: {}", self.current_fps));
+                ui.label(format!("Processing Time: {}", self.current_processing_time));
+
+                ui.add(egui::Slider::new(&mut self.setting_mut_threshold, 0..=255).text("Threshold"));
+                self.setting_threshold.store(self.setting_mut_threshold, Ordering::Relaxed);
+
+                ui.add(egui::Slider::new(&mut self.setting_mut_block_size,1..=128).text("Block Size"));
+                self.setting_block_size.store(self.setting_mut_block_size, Ordering::Relaxed);
             }
         });
     }
